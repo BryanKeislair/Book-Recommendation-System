@@ -9,9 +9,15 @@ COVERS_DIR = "covers"
 # --- Functies ---
 def load_books():
     if os.path.exists(BOOKS_FILE):
-        return pd.read_csv(BOOKS_FILE)
+        # Forceer kolomnamen consistent te houden
+        df = pd.read_csv(BOOKS_FILE)
+        expected_columns = ["Titel", "Auteur", "Genre", "Beschrijving", "Cover"]
+        for col in expected_columns:
+            if col not in df.columns:
+                df[col] = ""
+        return df[expected_columns]
     else:
-        return pd.DataFrame(columns=["Title", "Author", "Genre", "Description", "Cover"])
+        return pd.DataFrame(columns=["Titel", "Auteur", "Genre", "Beschrijving", "Cover"])
 
 def save_books(df):
     df.to_csv(BOOKS_FILE, index=False)
@@ -24,14 +30,12 @@ st.title("📚 AI Leesplatform")
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 
-books_df = st.session_state.books_df
-
 # --- Sectie: Boekenlijst ---
 st.header("📖 Boekenlijst")
-if books_df.empty:
+if st.session_state.books_df.empty:
     st.info("Nog geen boeken toegevoegd.")
 else:
-    st.dataframe(books_df, use_container_width=True)
+    st.dataframe(st.session_state.books_df, use_container_width=True)
 
 # --- Sectie: Boek toevoegen ---
 st.header("➕ Nieuw boek toevoegen")
@@ -45,21 +49,28 @@ with st.form("add_book"):
 
     if submitted:
         if title.strip() and author.strip():
+            os.makedirs(COVERS_DIR, exist_ok=True)
             cover_path = ""
             if cover_file is not None:
-                os.makedirs(COVERS_DIR, exist_ok=True)
-                cover_path = f"{COVERS_DIR}/{title.strip().replace(' ', '_')}.png"
+                cover_path = os.path.join(COVERS_DIR, f"{title.strip().replace(' ', '_')}.png")
                 with open(cover_path, "wb") as f:
                     f.write(cover_file.getbuffer())
 
-            new_book = {"Title": title.strip(), 
-                        "Author": author.strip(), 
-                        "Genre": genre.strip(), 
-                        "Description": description.strip(),
-                        "Cover": cover_path
-                    }
-            # Voeg toe aan session_state dataframe
-            st.session_state.books_df = pd.concat([books_df, pd.DataFrame([new_book])], ignore_index=True)
+            # Zorg dat alle kolommen exact in dezelfde volgorde aanwezig zijn
+            new_row = {
+                "Titel": title.strip(),
+                "Auteur": author.strip(),
+                "Genre": genre.strip(),
+                "Beschrijving": description.strip(),
+                "Cover": cover_path
+            }
+
+            # Nieuwe rij toevoegen
+            st.session_state.books_df = pd.concat(
+                [st.session_state.books_df, pd.DataFrame([new_row])],
+                ignore_index=True
+            )
+
             save_books(st.session_state.books_df)
             st.success(f"✅ '{title}' toegevoegd!")
         else:
