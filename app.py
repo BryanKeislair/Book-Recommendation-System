@@ -9,7 +9,6 @@ COVERS_DIR = "covers"
 # --- Functies ---
 def load_books():
     if os.path.exists(BOOKS_FILE):
-        # Forceer kolomnamen consistent te houden
         df = pd.read_csv(BOOKS_FILE)
         expected_columns = ["Titel", "Auteur", "Genre", "Beschrijving", "Cover"]
         for col in expected_columns:
@@ -31,47 +30,57 @@ if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 
 # --- Sectie: Boekenlijst ---
-st.header("📖 Boekenlijst")
+st.subheader("📖 Boeken")
 if st.session_state.books_df.empty:
     st.info("Nog geen boeken toegevoegd.")
 else:
-    st.dataframe(st.session_state.books_df, use_container_width=True)
+    for i, row in st.session_state.books_df.iterrows():
+        cols = st.columns([1, 4])
+        if row["Cover"] and os.path.exists(row["Cover"]):
+            cols[0].image(row["Cover"], width=120)
+        else:
+            cols[0].write("📕")
+        cols[1].markdown(
+            f"**{row['Titel']}**  \n"
+            f"*Auteur:* {row['Auteur']}  \n"
+            f"*Genre:* {row['Genre']}  \n"
+            f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
+        )
+        st.divider()
 
 # --- Sectie: Boek toevoegen ---
-st.header("➕ Nieuw boek toevoegen")
-with st.form("add_book"):
-    title = st.text_input("Titel*")
-    author = st.text_input("Auteur*")
-    genre = st.text_input("Genre")
-    description = st.text_area("Beschrijving")
-    cover_file = st.file_uploader("Coverafbeelding (jpg/png)", type=["jpg", "jpeg", "png"])
-    submitted = st.form_submit_button("Toevoegen")
+with st.expander("➕ Nieuw boek toevoegen"):
+    with st.form("add_book"):
+        title = st.text_input("Titel*")
+        author = st.text_input("Auteur*")
+        genre = st.text_input("Genre")
+        description = st.text_area("Beschrijving")
+        cover_file = st.file_uploader("Coverafbeelding (jpg/png)", type=["jpg", "jpeg", "png"])
+        submitted = st.form_submit_button("Toevoegen")
 
-    if submitted:
-        if title.strip() and author.strip():
-            os.makedirs(COVERS_DIR, exist_ok=True)
-            cover_path = ""
-            if cover_file is not None:
-                cover_path = os.path.join(COVERS_DIR, f"{title.strip().replace(' ', '_')}.png")
-                with open(cover_path, "wb") as f:
-                    f.write(cover_file.getbuffer())
+        if submitted:
+            if title.strip() and author.strip():
+                os.makedirs(COVERS_DIR, exist_ok=True)
+                cover_path = ""
+                if cover_file is not None:
+                    cover_path = os.path.join(COVERS_DIR, f"{title.strip().replace(' ', '_')}.png")
+                    with open(cover_path, "wb") as f:
+                        f.write(cover_file.getbuffer())
 
-            # Zorg dat alle kolommen exact in dezelfde volgorde aanwezig zijn
-            new_row = {
-                "Titel": title.strip(),
-                "Auteur": author.strip(),
-                "Genre": genre.strip(),
-                "Beschrijving": description.strip(),
-                "Cover": cover_path
-            }
+                new_row = {
+                    "Titel": title.strip(),
+                    "Auteur": author.strip(),
+                    "Genre": genre.strip(),
+                    "Beschrijving": description.strip(),
+                    "Cover": cover_path
+                }
 
-            # Nieuwe rij toevoegen
-            st.session_state.books_df = pd.concat(
-                [st.session_state.books_df, pd.DataFrame([new_row])],
-                ignore_index=True
-            )
+                st.session_state.books_df = pd.concat(
+                    [st.session_state.books_df, pd.DataFrame([new_row])],
+                    ignore_index=True
+                )
 
-            save_books(st.session_state.books_df)
-            st.success(f"✅ '{title}' toegevoegd!")
-        else:
-            st.error("Titel en auteur zijn verplicht.")
+                save_books(st.session_state.books_df)
+                st.success(f"✅ '{title}' toegevoegd!")
+            else:
+                st.error("Titel en auteur zijn verplicht.")
