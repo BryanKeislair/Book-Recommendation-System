@@ -42,7 +42,7 @@ else:
             # Kleine preview
             cols[0].image(cover_path, width=120)
         else:
-            cols[0].write("📕")
+            cols[0].write("Cover niet beschikbaar📕")
 
         # Boekeninfo
         cols[1].markdown(
