@@ -36,8 +36,10 @@ if st.session_state.books_df.empty:
 else:
     for i, row in st.session_state.books_df.iterrows():
         cols = st.columns([1, 4])
-        if row["Cover"] and os.path.exists(row["Cover"]):
-            cols[0].image(row["Cover"], width=120)
+        cover_path = row["Cover"]
+
+        if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
+            cols[0].image(cover_path, width=120)
         else:
             cols[0].write("📕")
         cols[1].markdown(
