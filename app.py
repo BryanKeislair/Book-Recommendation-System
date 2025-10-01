@@ -39,16 +39,26 @@ else:
         cover_path = row["Cover"]
 
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
+            # Kleine preview
             cols[0].image(cover_path, width=120)
         else:
             cols[0].write("📕")
+
+        # Boekeninfo
         cols[1].markdown(
             f"**{row['Titel']}**  \n"
             f"*Auteur:* {row['Auteur']}  \n"
             f"*Genre:* {row['Genre']}  \n"
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
+
+        # Extra expander om cover groot weer te geven in de app zelf
+        if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
+            with st.expander("📸 Bekijk cover op volledig formaat"):
+                st.image(cover_path, use_container_width=True)
+
         st.divider()
+
 
 # --- Sectie: Boek toevoegen ---
 with st.expander("➕ Nieuw boek toevoegen"):
