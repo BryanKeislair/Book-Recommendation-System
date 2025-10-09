@@ -29,12 +29,39 @@ st.title("📚 AI Leesplatform")
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 
+# --- Sidebar: Zoeken & filteren ---
+st.sidebar.header("🔎 Zoeken & filteren")
+search_query = st.sidebar.text_input("Zoek op titel of beschrijving")
+selected_genre = st.sidebar.selectbox(
+    "Filter op genre",
+    ["Alle"] + sorted(st.session_state.books_df["Genre"].dropna().unique().tolist())
+)
+selected_author = st.sidebar.selectbox(
+    "Filter op auteur",
+    ["Alle"] + sorted(st.session_state.books_df["Auteur"].dropna().unique().tolist())
+)
+
+# --- Filter logica ---
+filtered_books = st.session_state.books_df.copy()
+
+if search_query:
+    filtered_books = filtered_books[
+        filtered_books["Titel"].str.contains(search_query, case=False, na=False) |
+        filtered_books["Beschrijving"].str.contains(search_query, case=False, na=False)
+    ]
+
+if selected_genre != "Alle":
+    filtered_books = filtered_books[filtered_books["Genre"] == selected_genre]
+
+if selected_author != "Alle":
+    filtered_books = filtered_books[filtered_books["Auteur"] == selected_author]
+
 # --- Sectie: Boekenlijst ---
 st.subheader("📖 Boeken")
-if st.session_state.books_df.empty:
-    st.info("Nog geen boeken toegevoegd.")
+if filtered_books.empty:
+    st.info("Geen boeken gevonden met de huidige filters.")
 else:
-    for i, row in st.session_state.books_df.iterrows():
+    for i, row in filtered_books.iterrows():
         cols = st.columns([1, 4])
         cover_path = row["Cover"]
 
@@ -42,7 +69,7 @@ else:
             # Kleine preview
             cols[0].image(cover_path, width=120)
         else:
-            cols[0].write("Cover niet beschikbaar📕")
+            cols[0].write("📕 Cover niet beschikbaar")
 
         # Boekeninfo
         cols[1].markdown(
@@ -52,13 +79,12 @@ else:
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
 
-        # Extra expander om cover groot weer te geven in de app zelf
+        # Extra expander om cover groot weer te geven
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             with st.expander("📸 Bekijk cover op volledig formaat"):
                 st.image(cover_path, use_container_width=True)
 
         st.divider()
-
 
 # --- Sectie: Boek toevoegen ---
 with st.expander("➕ Nieuw boek toevoegen"):
