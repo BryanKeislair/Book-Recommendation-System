@@ -70,7 +70,7 @@ else:
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             cols[0].image(cover_path, width=120)
         else:
-            cols[0].write("📕")
+            cols[0].write("📕 Geen coverafbeelding beschikbaar")
 
         cols[1].markdown(
             f"**{row['Titel']}**  \n"
@@ -142,7 +142,7 @@ else:
                 if isinstance(rec["Cover"], str) and rec["Cover"].strip() and os.path.exists(rec["Cover"]):
                     cols[0].image(rec["Cover"], width=100)
                 else:
-                    cols[0].write("📕")
+                    cols[0].write("📕 Geen coverafbeelding beschikbaar")
 
                 cols[1].markdown(
                     f"**{rec['Titel']}**  \n"
