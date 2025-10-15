@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # --- Config ---
 BOOKS_FILE = "books.csv"
@@ -14,12 +16,37 @@ def load_books():
         for col in expected_columns:
             if col not in df.columns:
                 df[col] = ""
-        return df[expected_columns]
+        return df[expected_columns].fillna("")
     else:
         return pd.DataFrame(columns=["Titel", "Auteur", "Genre", "Beschrijving", "Cover"])
 
 def save_books(df):
     df.to_csv(BOOKS_FILE, index=False)
+
+def maak_aanbevelingen(titel, df, top_n=5):
+    """Zoek soortgelijke boeken o.b.v. beschrijving en genre."""
+    if df.empty or titel not in df["Titel"].values:
+        return []
+
+    df["combined"] = df["Genre"].astype(str) + " " + df["Beschrijving"].astype(str)
+    vectorizer = TfidfVectorizer(stop_words="english")
+    tfidf_matrix = vectorizer.fit_transform(df["combined"])
+    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+    idx = df.index[df["Titel"] == titel][0]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
+
+    results = []
+    for i, score in sim_scores:
+        results.append({
+            "Titel": df.iloc[i]["Titel"],
+            "Auteur": df.iloc[i]["Auteur"],
+            "Genre": df.iloc[i]["Genre"],
+            "Cover": df.iloc[i]["Cover"],
+            "Score": round(score, 3)
+        })
+    return results
 
 # --- App start ---
 st.set_page_config(page_title="AI Leesplatform", page_icon="📚", layout="wide")
@@ -29,49 +56,22 @@ st.title("📚 AI Leesplatform")
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 
-# --- Sidebar: Zoeken & filteren ---
-st.sidebar.header("🔎 Zoeken & filteren")
-search_query = st.sidebar.text_input("Zoek op titel of beschrijving")
-selected_genre = st.sidebar.selectbox(
-    "Filter op genre",
-    ["Alle"] + sorted(st.session_state.books_df["Genre"].dropna().unique().tolist())
-)
-selected_author = st.sidebar.selectbox(
-    "Filter op auteur",
-    ["Alle"] + sorted(st.session_state.books_df["Auteur"].dropna().unique().tolist())
-)
-
-# --- Filter logica ---
-filtered_books = st.session_state.books_df.copy()
-
-if search_query:
-    filtered_books = filtered_books[
-        filtered_books["Titel"].str.contains(search_query, case=False, na=False) |
-        filtered_books["Beschrijving"].str.contains(search_query, case=False, na=False)
-    ]
-
-if selected_genre != "Alle":
-    filtered_books = filtered_books[filtered_books["Genre"] == selected_genre]
-
-if selected_author != "Alle":
-    filtered_books = filtered_books[filtered_books["Auteur"] == selected_author]
+books_df = st.session_state.books_df
 
 # --- Sectie: Boekenlijst ---
 st.subheader("📖 Boeken")
-if filtered_books.empty:
-    st.info("Geen boeken gevonden met de huidige filters.")
+if books_df.empty:
+    st.info("Nog geen boeken toegevoegd.")
 else:
-    for i, row in filtered_books.iterrows():
+    for i, row in books_df.iterrows():
         cols = st.columns([1, 4])
         cover_path = row["Cover"]
 
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
-            # Kleine preview
             cols[0].image(cover_path, width=120)
         else:
-            cols[0].write("📕 Cover niet beschikbaar")
+            cols[0].write("📕")
 
-        # Boekeninfo
         cols[1].markdown(
             f"**{row['Titel']}**  \n"
             f"*Auteur:* {row['Auteur']}  \n"
@@ -79,7 +79,6 @@ else:
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
 
-        # Extra expander om cover groot weer te geven
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             with st.expander("📸 Bekijk cover op volledig formaat"):
                 st.image(cover_path, use_container_width=True)
@@ -122,3 +121,33 @@ with st.expander("➕ Nieuw boek toevoegen"):
                 st.success(f"✅ '{title}' toegevoegd!")
             else:
                 st.error("Titel en auteur zijn verplicht.")
+
+# --- Sectie: Aanbevolen boeken ---
+st.subheader("✨ Aanbevolen boeken")
+if books_df.empty:
+    st.info("Voeg eerst boeken toe om aanbevelingen te genereren.")
+else:
+    selected_title = st.selectbox("Kies een boek waarvoor je aanbevelingen wilt:", books_df["Titel"].tolist())
+
+    if selected_title:
+        aanbevelingen = maak_aanbevelingen(selected_title, books_df)
+
+        if not aanbevelingen:
+            st.warning("Geen vergelijkbare boeken gevonden.")
+        else:
+            st.write(f"📚 Boeken die lijken op **{selected_title}**:")
+
+            for rec in aanbevelingen:
+                cols = st.columns([1, 4])
+                if isinstance(rec["Cover"], str) and rec["Cover"].strip() and os.path.exists(rec["Cover"]):
+                    cols[0].image(rec["Cover"], width=100)
+                else:
+                    cols[0].write("📕")
+
+                cols[1].markdown(
+                    f"**{rec['Titel']}**  \n"
+                    f"*Auteur:* {rec['Auteur']}  \n"
+                    f"*Genre:* {rec['Genre']}  \n"
+                    f"💡 *Overeenkomstscore:* {rec['Score']}"
+                )
+                st.divider()
