@@ -81,7 +81,7 @@ else:
 
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             with st.expander("📸 Bekijk cover op volledig formaat"):
-                st.image(cover_path, use_container_width=True)
+                st.image(cover_path, width='stretch')
 
         st.divider()
 
