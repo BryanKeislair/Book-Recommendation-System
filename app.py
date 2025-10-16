@@ -8,6 +8,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 # --- Config ---
 BOOKS_FILE = "books.csv"
+USER_DATA_FILE = "user_data.csv"
 COVERS_DIR = "covers"
 EMBEDDINGS_FILE = "book_embeddings.npy"
 META_FILE = "book_meta.pkl"
@@ -28,6 +29,17 @@ def load_books():
 
 def save_books(df):
     df.to_csv(BOOKS_FILE, index=False)
+
+
+def load_user_data():
+    if os.path.exists(USER_DATA_FILE):
+        return pd.read_csv(USER_DATA_FILE)
+    else:
+        return pd.DataFrame(columns=["Titel", "Status"])
+
+
+def save_user_data(df):
+    df.to_csv(USER_DATA_FILE, index=False)
 
 
 def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
@@ -59,13 +71,11 @@ def maak_aanbevelingen_semantic(titel, df, top_n=5):
     if df.empty or titel not in df["Titel"].values:
         return []
 
-    # 1) Probeer embeddings
     if os.path.exists(EMBEDDINGS_FILE) and os.path.exists(META_FILE):
         embeddings = np.load(EMBEDDINGS_FILE)
         meta = joblib.load(META_FILE)
         titles = meta["titles"]
 
-        # Titel → index mapping
         title_to_idx = {t: i for i, t in enumerate(titles)}
         if titel not in title_to_idx:
             return _maak_aanbevelingen_tfidf(titel, df, top_n)
@@ -86,8 +96,46 @@ def maak_aanbevelingen_semantic(titel, df, top_n=5):
             })
         return results
     else:
-        # fallback naar TF-IDF
         return _maak_aanbevelingen_tfidf(titel, df, top_n)
+
+
+def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
+    """Genereer aanbevelingen op basis van favoriete boeken van de gebruiker."""
+    if user_df.empty or not os.path.exists(EMBEDDINGS_FILE):
+        return []
+
+    fav_books = user_df[user_df["Status"] == "Favoriet"]["Titel"].tolist()
+    if not fav_books:
+        return []
+
+    embeddings = np.load(EMBEDDINGS_FILE)
+    meta = joblib.load(META_FILE)
+    titles = meta["titles"]
+
+    title_to_idx = {t: i for i, t in enumerate(titles)}
+    fav_idx = [title_to_idx[t] for t in fav_books if t in title_to_idx]
+
+    if not fav_idx:
+        return []
+
+    mean_vector = np.mean(embeddings[fav_idx], axis=0, keepdims=True)
+    sims = cosine_similarity(mean_vector, embeddings).flatten()
+    top_idx = sims.argsort()[::-1]
+
+    results = []
+    for i in top_idx:
+        book_title = books_df.iloc[i]["Titel"]
+        if book_title not in fav_books:
+            results.append({
+                "Titel": book_title,
+                "Auteur": books_df.iloc[i]["Auteur"],
+                "Genre": books_df.iloc[i]["Genre"],
+                "Cover": books_df.iloc[i]["Cover"],
+                "Score": float(round(sims[i], 3))
+            })
+        if len(results) >= top_n:
+            break
+    return results
 
 
 # --- App start ---
@@ -98,7 +146,11 @@ st.title("📚 AI Leesplatform")
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 
+if "user_df" not in st.session_state:
+    st.session_state.user_df = load_user_data()
+
 books_df = st.session_state.books_df
+user_df = st.session_state.user_df
 
 # --- Sectie: Boekenlijst ---
 st.subheader("📖 Boeken")
@@ -112,7 +164,7 @@ else:
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             cols[0].image(cover_path, width=120)
         else:
-            cols[0].write("📕 Geen coverafbeelding beschikbaar")
+            cols[0].write("📕 Geen coverafbeelding")
 
         cols[1].markdown(
             f"**{row['Titel']}**  \n"
@@ -121,75 +173,45 @@ else:
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
 
-        if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
-            with st.expander("📸 Bekijk cover op volledig formaat"):
-                st.image(cover_path, use_container_width=True)
+        status = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
+        status_text = f"✅ ({status[0]})" if len(status) > 0 else ""
 
+        with cols[1]:
+            col1, col2 = st.columns(2)
+            if col1.button(f"📘 Gelezen", key=f"read_{i}"):
+                user_df = user_df[user_df["Titel"] != row["Titel"]]
+                user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
+                save_user_data(user_df)
+                st.session_state.user_df = user_df
+                st.rerun()
+
+            if col2.button(f"💖 Favoriet", key=f"fav_{i}"):
+                user_df = user_df[user_df["Titel"] != row["Titel"]]
+                user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
+                save_user_data(user_df)
+                st.session_state.user_df = user_df
+                st.rerun()
+
+        st.caption(status_text)
         st.divider()
 
-# --- Sectie: Boek toevoegen ---
-with st.expander("➕ Nieuw boek toevoegen"):
-    with st.form("add_book"):
-        title = st.text_input("Titel*")
-        author = st.text_input("Auteur*")
-        genre = st.text_input("Genre")
-        description = st.text_area("Beschrijving")
-        cover_file = st.file_uploader("Coverafbeelding (jpg/png)", type=["jpg", "jpeg", "png"])
-        submitted = st.form_submit_button("Toevoegen")
+# --- Sectie: Persoonlijke aanbevelingen ---
+st.subheader("🎯 Persoonlijke aanbevelingen")
+persoonlijke_recs = persoonlijke_aanbevelingen(user_df, books_df)
 
-        if submitted:
-            if title.strip() and author.strip():
-                os.makedirs(COVERS_DIR, exist_ok=True)
-                cover_path = ""
-                if cover_file is not None:
-                    cover_path = os.path.join(COVERS_DIR, f"{title.strip().replace(' ', '_')}.png")
-                    with open(cover_path, "wb") as f:
-                        f.write(cover_file.getbuffer())
-
-                new_row = {
-                    "Titel": title.strip(),
-                    "Auteur": author.strip(),
-                    "Genre": genre.strip(),
-                    "Beschrijving": description.strip(),
-                    "Cover": cover_path
-                }
-
-                st.session_state.books_df = pd.concat(
-                    [st.session_state.books_df, pd.DataFrame([new_row])],
-                    ignore_index=True
-                )
-
-                save_books(st.session_state.books_df)
-                st.success(f"✅ '{title}' toegevoegd!")
-            else:
-                st.error("Titel en auteur zijn verplicht.")
-
-# --- Sectie: Aanbevolen boeken ---
-st.subheader("✨ Aanbevolen boeken")
-if books_df.empty:
-    st.info("Voeg eerst boeken toe om aanbevelingen te genereren.")
+if not persoonlijke_recs:
+    st.info("Markeer enkele boeken als favoriet om persoonlijke aanbevelingen te krijgen.")
 else:
-    selected_title = st.selectbox("Kies een boek waarvoor je aanbevelingen wilt:", books_df["Titel"].tolist())
-
-    if selected_title:
-        aanbevelingen = maak_aanbevelingen_semantic(selected_title, books_df)
-
-        if not aanbevelingen:
-            st.warning("Geen vergelijkbare boeken gevonden.")
+    for rec in persoonlijke_recs:
+        cols = st.columns([1, 4])
+        if isinstance(rec["Cover"], str) and rec["Cover"].strip() and os.path.exists(rec["Cover"]):
+            cols[0].image(rec["Cover"], width=100)
         else:
-            st.write(f"📚 Boeken die lijken op **{selected_title}**:")
-
-            for rec in aanbevelingen:
-                cols = st.columns([1, 4])
-                if isinstance(rec["Cover"], str) and rec["Cover"].strip() and os.path.exists(rec["Cover"]):
-                    cols[0].image(rec["Cover"], width=100)
-                else:
-                    cols[0].write("📕 Geen coverafbeelding beschikbaar")
-
-                cols[1].markdown(
-                    f"**{rec['Titel']}**  \n"
-                    f"*Auteur:* {rec['Auteur']}  \n"
-                    f"*Genre:* {rec['Genre']}  \n"
-                    f"💡 *Overeenkomstscore:* {rec['Score']}"
-                )
-                st.divider()
+            cols[0].write("📕 Geen cover")
+        cols[1].markdown(
+            f"**{rec['Titel']}**  \n"
+            f"*Auteur:* {rec['Auteur']}  \n"
+            f"*Genre:* {rec['Genre']}  \n"
+            f"💡 *Score:* {rec['Score']}"
+        )
+        st.divider()
