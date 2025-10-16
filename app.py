@@ -1,12 +1,17 @@
 import streamlit as st
 import pandas as pd
 import os
+import numpy as np
+import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # --- Config ---
 BOOKS_FILE = "books.csv"
 COVERS_DIR = "covers"
+EMBEDDINGS_FILE = "book_embeddings.npy"
+META_FILE = "book_meta.pkl"
+
 
 # --- Functies ---
 def load_books():
@@ -20,33 +25,70 @@ def load_books():
     else:
         return pd.DataFrame(columns=["Titel", "Auteur", "Genre", "Beschrijving", "Cover"])
 
+
 def save_books(df):
     df.to_csv(BOOKS_FILE, index=False)
 
-def maak_aanbevelingen(titel, df, top_n=5):
-    """Zoek soortgelijke boeken o.b.v. beschrijving en genre."""
-    if df.empty or titel not in df["Titel"].values:
-        return []
 
-    df["combined"] = df["Genre"].astype(str) + " " + df["Beschrijving"].astype(str)
+def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
+    """Fallback-methode met TF-IDF."""
+    df_local = df.copy()
+    df_local["combined"] = df_local["Genre"].astype(str) + " " + df_local["Beschrijving"].astype(str)
     vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(df["combined"])
+    tfidf_matrix = vectorizer.fit_transform(df_local["combined"])
     cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
-    idx = df.index[df["Titel"] == titel][0]
+    idx = df_local.index[df_local["Titel"] == titel][0]
     sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n + 1]
 
     results = []
     for i, score in sim_scores:
         results.append({
-            "Titel": df.iloc[i]["Titel"],
-            "Auteur": df.iloc[i]["Auteur"],
-            "Genre": df.iloc[i]["Genre"],
-            "Cover": df.iloc[i]["Cover"],
+            "Titel": df_local.iloc[i]["Titel"],
+            "Auteur": df_local.iloc[i]["Auteur"],
+            "Genre": df_local.iloc[i]["Genre"],
+            "Cover": df_local.iloc[i]["Cover"],
             "Score": round(score, 3)
         })
     return results
+
+
+def maak_aanbevelingen_semantic(titel, df, top_n=5):
+    """Gebruik semantische embeddings voor aanbevelingen (fallback op TF-IDF als embeddings ontbreken)."""
+    if df.empty or titel not in df["Titel"].values:
+        return []
+
+    # 1) Probeer embeddings
+    if os.path.exists(EMBEDDINGS_FILE) and os.path.exists(META_FILE):
+        embeddings = np.load(EMBEDDINGS_FILE)
+        meta = joblib.load(META_FILE)
+        titles = meta["titles"]
+
+        # Titel → index mapping
+        title_to_idx = {t: i for i, t in enumerate(titles)}
+        if titel not in title_to_idx:
+            return _maak_aanbevelingen_tfidf(titel, df, top_n)
+
+        idx = title_to_idx[titel]
+        sims = cosine_similarity(embeddings[idx:idx + 1], embeddings).flatten()
+        top_idx = sims.argsort()[::-1][1: top_n + 1]
+
+        results = []
+        for i in top_idx:
+            row = df.iloc[i]
+            results.append({
+                "Titel": row["Titel"],
+                "Auteur": row["Auteur"],
+                "Genre": row["Genre"],
+                "Cover": row.get("Cover", ""),
+                "Score": float(round(sims[i], 3))
+            })
+        return results
+    else:
+        # fallback naar TF-IDF
+        return _maak_aanbevelingen_tfidf(titel, df, top_n)
+
 
 # --- App start ---
 st.set_page_config(page_title="AI Leesplatform", page_icon="📚", layout="wide")
@@ -81,7 +123,7 @@ else:
 
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             with st.expander("📸 Bekijk cover op volledig formaat"):
-                st.image(cover_path, width='stretch')
+                st.image(cover_path, use_container_width=True)
 
         st.divider()
 
@@ -130,7 +172,7 @@ else:
     selected_title = st.selectbox("Kies een boek waarvoor je aanbevelingen wilt:", books_df["Titel"].tolist())
 
     if selected_title:
-        aanbevelingen = maak_aanbevelingen(selected_title, books_df)
+        aanbevelingen = maak_aanbevelingen_semantic(selected_title, books_df)
 
         if not aanbevelingen:
             st.warning("Geen vergelijkbare boeken gevonden.")
