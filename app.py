@@ -13,7 +13,6 @@ COVERS_DIR = "covers"
 EMBEDDINGS_FILE = "book_embeddings.npy"
 META_FILE = "book_meta.pkl"
 
-
 # --- Functies ---
 def load_books():
     if os.path.exists(BOOKS_FILE):
@@ -26,10 +25,8 @@ def load_books():
     else:
         return pd.DataFrame(columns=["Titel", "Auteur", "Genre", "Beschrijving", "Cover"])
 
-
 def save_books(df):
     df.to_csv(BOOKS_FILE, index=False)
-
 
 def load_user_data():
     if os.path.exists(USER_DATA_FILE):
@@ -37,10 +34,8 @@ def load_user_data():
     else:
         return pd.DataFrame(columns=["Titel", "Status"])
 
-
 def save_user_data(df):
     df.to_csv(USER_DATA_FILE, index=False)
-
 
 def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
     """Fallback-methode met TF-IDF."""
@@ -64,7 +59,6 @@ def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
             "Score": round(score, 3)
         })
     return results
-
 
 def maak_aanbevelingen_semantic(titel, df, top_n=5):
     """Gebruik semantische embeddings voor aanbevelingen (fallback op TF-IDF als embeddings ontbreken)."""
@@ -98,7 +92,6 @@ def maak_aanbevelingen_semantic(titel, df, top_n=5):
     else:
         return _maak_aanbevelingen_tfidf(titel, df, top_n)
 
-
 def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
     """Genereer aanbevelingen op basis van favoriete boeken van de gebruiker."""
     if user_df.empty or not os.path.exists(EMBEDDINGS_FILE):
@@ -114,7 +107,6 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
 
     title_to_idx = {t: i for i, t in enumerate(titles)}
     fav_idx = [title_to_idx[t] for t in fav_books if t in title_to_idx]
-
     if not fav_idx:
         return []
 
@@ -137,7 +129,6 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
             break
     return results
 
-
 # --- App start ---
 st.set_page_config(page_title="AI Leesplatform", page_icon="📚", layout="wide")
 st.title("📚 AI Leesplatform")
@@ -145,7 +136,6 @@ st.title("📚 AI Leesplatform")
 # --- Data inladen ---
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
-
 if "user_df" not in st.session_state:
     st.session_state.user_df = load_user_data()
 
@@ -198,7 +188,6 @@ else:
 # --- Sectie: Persoonlijke aanbevelingen ---
 st.subheader("🎯 Persoonlijke aanbevelingen")
 persoonlijke_recs = persoonlijke_aanbevelingen(user_df, books_df)
-
 if not persoonlijke_recs:
     st.info("Markeer enkele boeken als favoriet om persoonlijke aanbevelingen te krijgen.")
 else:
@@ -215,3 +204,34 @@ else:
             f"💡 *Score:* {rec['Score']}"
         )
         st.divider()
+
+# --- Sectie: Auteurherkenning ---
+st.subheader("✍️ Auteurherkenning")
+if os.path.exists("author_model.pkl") and os.path.exists("author_vectorizer.pkl"):
+    model = joblib.load("author_model.pkl")
+    vectorizer = joblib.load("author_vectorizer.pkl")
+
+    input_text = st.text_area("Voer een tekstfragment in om de auteur te voorspellen:")
+
+    if st.button("🔍 Voorspel auteur"):
+        if input_text.strip():
+            X_vec = vectorizer.transform([input_text])
+            probs = model.predict_proba(X_vec)[0]
+            authors = model.classes_
+            best_idx = probs.argmax()
+            predicted_author = authors[best_idx]
+            confidence = probs[best_idx] * 100
+
+            st.success(f"🧠 Waarschijnlijk geschreven door: **{predicted_author}** ({confidence:.2f}% zekerheid)")
+
+            # Visualisatie
+            st.write("📊 Zekerheid per auteur:")
+            chart_data = pd.DataFrame({
+                "Auteur": authors,
+                "Zekerheid (%)": probs * 100
+            }).sort_values("Zekerheid (%)", ascending=False)
+            st.bar_chart(chart_data.set_index("Auteur"))
+        else:
+            st.warning("Voer eerst een tekstfragment in.")
+else:
+    st.info("⚠️ Auteurmodel niet gevonden. Train eerst het model via `train_author_model.py`.")
