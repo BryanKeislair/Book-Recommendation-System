@@ -189,7 +189,7 @@ else:
         st.divider()
 
 # --- Sectie: Boeken importeren via Google Books ---
-st.subheader("🌐 Boeken importeren vanuit Google Books")
+st.subheader("🌐 Boeken toevoegen")
 
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:")
 if st.button("🔍 Zoek boeken"):
