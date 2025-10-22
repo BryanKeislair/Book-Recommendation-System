@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import numpy as np
 import joblib
+import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -153,6 +154,8 @@ else:
 
         if isinstance(cover_path, str) and cover_path.strip() and os.path.exists(cover_path):
             cols[0].image(cover_path, width=120)
+        elif isinstance(cover_path, str) and cover_path.startswith("http"):
+            cols[0].image(cover_path, width=120)
         else:
             cols[0].write("📕 Geen coverafbeelding")
 
@@ -185,6 +188,58 @@ else:
         st.caption(status_text)
         st.divider()
 
+# --- Sectie: Boeken importeren via Google Books ---
+st.subheader("🌐 Boeken importeren vanuit Google Books")
+
+search_query = st.text_input("Zoek op titel, auteur of onderwerp:")
+if st.button("🔍 Zoek boeken"):
+    if not search_query.strip():
+        st.warning("Voer een zoekterm in.")
+    else:
+        url = f"https://www.googleapis.com/books/v1/volumes?q={search_query}&maxResults=6&langRestrict=nl"
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            items = data.get("items", [])
+            if not items:
+                st.info("Geen resultaten gevonden.")
+            else:
+                for item in items:
+                    info = item.get("volumeInfo", {})
+                    title = info.get("title", "Onbekende titel")
+                    authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
+                    genre = ", ".join(info.get("categories", ["Onbekend genre"]))
+                    description = info.get("description", "Geen beschrijving beschikbaar")
+                    cover = info.get("imageLinks", {}).get("thumbnail", "")
+
+                    with st.container():
+                        cols = st.columns([1, 3])
+                        with cols[0]:
+                            if cover:
+                                st.image(cover, width=100)
+                            else:
+                                st.write("📕 Geen cover")
+                        with cols[1]:
+                            st.markdown(f"**{title}**  \n*Auteur:* {authors}  \n*Genre:* {genre}")
+                            st.caption(description[:300] + ("..." if len(description) > 300 else ""))
+
+                            if st.button(f"➕ Voeg toe: {title}", key=f"add_{title}"):
+                                new_row = {
+                                    "Titel": title,
+                                    "Auteur": authors,
+                                    "Genre": genre,
+                                    "Beschrijving": description,
+                                    "Cover": cover
+                                }
+                                st.session_state.books_df = pd.concat(
+                                    [st.session_state.books_df, pd.DataFrame([new_row])],
+                                    ignore_index=True
+                                )
+                                save_books(st.session_state.books_df)
+                                st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
+        else:
+            st.error("Fout bij ophalen van resultaten van Google Books API.")
+
 # --- Sectie: Persoonlijke aanbevelingen ---
 st.subheader("🎯 Persoonlijke aanbevelingen")
 persoonlijke_recs = persoonlijke_aanbevelingen(user_df, books_df)
@@ -193,7 +248,7 @@ if not persoonlijke_recs:
 else:
     for rec in persoonlijke_recs:
         cols = st.columns([1, 4])
-        if isinstance(rec["Cover"], str) and rec["Cover"].strip() and os.path.exists(rec["Cover"]):
+        if isinstance(rec["Cover"], str) and rec["Cover"].strip() and (os.path.exists(rec["Cover"]) or rec["Cover"].startswith("http")):
             cols[0].image(rec["Cover"], width=100)
         else:
             cols[0].write("📕 Geen cover")
