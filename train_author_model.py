@@ -12,28 +12,32 @@ MODEL_FILE = "author_model.pkl"
 VECTORIZER_FILE = "author_vectorizer.pkl"
 
 # === 1. Dataset inladen ===
-# Verwacht structuur:
-# authors/
-#   ├── tolkien.txt
-#   ├── rowling.txt
-#   ├── austen.txt
-#   ├── poe.txt
-# Elke .txt bevat enkele alinea’s van die auteur
-
 data = []
+
+if not os.path.exists(DATA_DIR):
+    raise FileNotFoundError(f"❌ Map niet gevonden: {DATA_DIR}. Controleer of 'data/authors' bestaat.")
+
 for file in os.listdir(DATA_DIR):
     if file.endswith(".txt"):
         author = file.replace(".txt", "")
-        with open(os.path.join(DATA_DIR, file), "r", encoding="utf-8") as f:
-            text = f.read()
-            # Tekst opsplitsen in stukken (bijv. 300 woorden)
-            chunks = text.split("\n\n")
+        file_path = os.path.join(DATA_DIR, file)
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+
+            # Splits tekst op basis van lege regels of regeleinden
+            chunks = [chunk.strip() for chunk in text.splitlines() if chunk.strip()]
+
             for c in chunks:
-                if len(c.strip().split()) > 30:  # minimaal 30 woorden
-                    data.append({"auteur": author, "tekst": c.strip()})
+                # Alleen fragmenten met voldoende woorden gebruiken
+                if len(c.split()) > 5:  # iets lagere drempel voor kleinere teksten
+                    data.append({"auteur": author, "tekst": c})
+
+if not data:
+    raise ValueError("❌ Geen tekstfragmenten gevonden. Controleer of je bestanden tekst bevatten met minstens 5 woorden per regel.")
 
 df = pd.DataFrame(data)
-print(f"✅ {len(df)} tekstfragmenten geladen van {df['auteur'].nunique()} auteurs.")
+print(f"✅ {len(df)} tekstfragmenten geladen van {df['auteur'].nunique()} auteurs: {df['auteur'].unique().tolist()}")
 
 # === 2. Dataset splitsen ===
 X_train, X_test, y_train, y_test = train_test_split(
