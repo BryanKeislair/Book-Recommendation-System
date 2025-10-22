@@ -131,8 +131,8 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
     return results
 
 # --- App start ---
-st.set_page_config(page_title="AI Leesplatform", page_icon="📚", layout="wide")
-st.title("📚 AI Leesplatform")
+st.set_page_config(page_title="Leesplatform", page_icon="📚", layout="wide")
+st.title("📚 Leesplatform")
 
 # --- Data inladen ---
 if "books_df" not in st.session_state:
