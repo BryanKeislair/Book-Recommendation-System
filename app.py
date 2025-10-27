@@ -6,6 +6,8 @@ import joblib
 import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
+import threading
 
 # --- Config ---
 BOOKS_FILE = "books.csv"
@@ -38,6 +40,36 @@ def load_user_data():
 def save_user_data(df):
     df.to_csv(USER_DATA_FILE, index=False)
 
+# --- Nieuwe functie: embeddings updaten ---
+def update_embeddings_ui():
+    """Toont voortgang in Streamlit en start embedding-update in aparte thread."""
+    st.info("🔄 Boekenlijst wordt bijgewerkt... even geduld aub ⏳")
+
+    def _run():
+        update_embeddings()
+        st.session_state["embedding_update_done"] = True
+
+    threading.Thread(target=_run, daemon=True).start()
+
+def update_embeddings():
+    """Herberekent ALLE embeddings en slaat ze op."""
+    df = load_books()
+    if df.empty:
+        return
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    corpus = (
+        df["Titel"].astype(str) + " . " +
+        df["Auteur"].astype(str) + " . " +
+        df["Genre"].astype(str) + " . " +
+        df["Beschrijving"].astype(str)
+    )
+
+    embeddings = model.encode(corpus, convert_to_numpy=True)
+    np.save(EMBEDDINGS_FILE, embeddings)
+    joblib.dump({"titles": df["Titel"].tolist()}, META_FILE)
+
+# --- Aanbevelingsfuncties ---
 def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
     df_local = df.copy()
     df_local["combined"] = df_local["Genre"].astype(str) + " " + df_local["Beschrijving"].astype(str)
@@ -131,13 +163,12 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
 st.set_page_config(page_title="Leesplatform", page_icon="📚", layout="wide")
 st.title("📚 Leesplatform")
 
-# --- Zorg dat session_state geladen is ---
 if "books_df" not in st.session_state:
     st.session_state.books_df = load_books()
 if "user_df" not in st.session_state:
     st.session_state.user_df = load_user_data()
 
-# --- Sectie: Handmatig boek toevoegen (optioneel) ---
+# --- Handmatig boek toevoegen ---
 with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
     with st.form("add_book_form"):
         title = st.text_input("Titel*")
@@ -169,11 +200,12 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
                     ignore_index=True
                 )
                 save_books(st.session_state.books_df)
+                update_embeddings_ui()
                 st.success(f"✅ '{title}' toegevoegd aan je bibliotheek!")
             else:
                 st.error("Titel en auteur zijn verplicht.")
 
-# --- Sectie: Boeken importeren via Google Books ---
+# --- Google Books import ---
 st.subheader("🌐 Boeken importeren vanuit Google Books")
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:", key="gb_search")
 
@@ -230,13 +262,14 @@ if st.button("🔍 Zoek boeken", key="gb_search_btn"):
                                     ignore_index=True
                                 )
                                 save_books(st.session_state.books_df)
+                                update_embeddings_ui()
                                 st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
 
 # --- Data herladen ---
 books_df = st.session_state.books_df
 user_df = st.session_state.user_df
 
-# --- Sectie: Boekenlijst ---
+# --- Boekenlijst ---
 st.subheader("📖 Boeken")
 if books_df.empty:
     st.info("Nog geen boeken toegevoegd.")
@@ -281,7 +314,7 @@ else:
         st.caption(status_text)
         st.divider()
 
-# --- Sectie: Persoonlijke aanbevelingen ---
+# --- Persoonlijke aanbevelingen ---
 st.subheader("🎯 Persoonlijke aanbevelingen")
 persoonlijke_recs = persoonlijke_aanbevelingen(user_df, books_df)
 if not persoonlijke_recs:
@@ -303,7 +336,7 @@ else:
         )
         st.divider()
 
-# --- Sectie: Auteurherkenning ---
+# --- Auteurherkenning ---
 st.subheader("✍️ Auteurherkenning")
 if os.path.exists("author_model.pkl") and os.path.exists("author_vectorizer.pkl"):
     model = joblib.load("author_model.pkl")
@@ -331,3 +364,8 @@ if os.path.exists("author_model.pkl") and os.path.exists("author_vectorizer.pkl"
             st.warning("Voer eerst een tekstfragment in.")
 else:
     st.info("⚠️ Auteurmodel niet gevonden. Train eerst het model via `train_author_model.py`.")
+
+# --- Controleer of embeddings klaar zijn ---
+if st.session_state.get("embedding_update_done", False):
+    st.success("✅ Boekenlijst succesvol bijgewerkt!")
+    st.session_state["embedding_update_done"] = False
