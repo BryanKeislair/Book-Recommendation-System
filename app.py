@@ -40,9 +40,9 @@ def load_user_data():
 def save_user_data(df):
     df.to_csv(USER_DATA_FILE, index=False)
 
-# --- Nieuwe functie: embeddings updaten ---
+# --- Embeddings functie ---
 def update_embeddings_ui():
-    """Toont voortgang in Streamlit en start embedding-update in aparte thread."""
+    """Toont melding en start embedding-update in een aparte thread."""
     st.info("🔄 Boekenlijst wordt bijgewerkt... even geduld aub ⏳")
 
     def _run():
@@ -205,7 +205,7 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
             else:
                 st.error("Titel en auteur zijn verplicht.")
 
-# --- Google Books import ---
+# --- Google Books import (met persistente zoekresultaten) ---
 st.subheader("🌐 Boeken importeren vanuit Google Books")
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:", key="gb_search")
 
@@ -213,7 +213,7 @@ if st.button("🔍 Zoek boeken", key="gb_search_btn"):
     if not search_query.strip():
         st.warning("Voer een zoekterm in.")
     else:
-        url = f"https://www.googleapis.com/books/v1/volumes?q={search_query}&maxResults=6&langRestrict=nl"
+        url = f"https://www.googleapis.com/books/v1/volumes?q={search_query}&maxResults=12"
         try:
             response = requests.get(url, timeout=10)
             data = response.json()
@@ -222,55 +222,79 @@ if st.button("🔍 Zoek boeken", key="gb_search_btn"):
             data = {}
 
         items = data.get("items", [])
-        if not items:
-            st.info("Geen resultaten gevonden.")
-        else:
-            for item in items:
-                info = item.get("volumeInfo", {})
-                title = info.get("title", "Onbekende titel")
-                authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
-                genre = ", ".join(info.get("categories", ["Onbekend genre"]))
-                description = info.get("description", "Geen beschrijving beschikbaar")
-                cover = info.get("imageLinks", {}).get("thumbnail", "")
+        gb_items = []
+        for item in items:
+            info = item.get("volumeInfo", {})
+            title = info.get("title", "Onbekende titel")
+            authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
+            genre = ", ".join(info.get("categories", ["Onbekend genre"]))
+            description = info.get("description", "Geen beschrijving beschikbaar")
+            cover = info.get("imageLinks", {}).get("thumbnail", "")
 
-                with st.container():
-                    cols = st.columns([1, 3])
-                    with cols[0]:
-                        if cover:
-                            st.image(cover, width=100)
-                        else:
-                            st.write("📕 Geen cover")
-                    with cols[1]:
-                        st.markdown(f"**{title}**  \n*Auteur:* {authors}  \n*Genre:* {genre}")
-                        st.caption(description[:300] + ("..." if len(description) > 300 else ""))
+            gb_items.append({
+                "title": title,
+                "authors": authors,
+                "genre": genre,
+                "description": description,
+                "cover": cover
+            })
 
-                        if st.button(f"➕ Voeg toe: {title}", key=f"add_{title}"):
-                            exists = ((st.session_state.books_df["Titel"] == title) &
-                                      (st.session_state.books_df["Auteur"] == authors)).any()
-                            if exists:
-                                st.warning(f"'{title}' van {authors} staat al in je bibliotheek.")
-                            else:
-                                new_row = pd.DataFrame([{
-                                    "Titel": title,
-                                    "Auteur": authors,
-                                    "Genre": genre,
-                                    "Beschrijving": description,
-                                    "Cover": cover
-                                }])
-                                st.session_state.books_df = pd.concat(
-                                    [st.session_state.books_df, new_row],
-                                    ignore_index=True
-                                )
-                                save_books(st.session_state.books_df)
-                                update_embeddings_ui()
-                                st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
+        st.session_state["gb_items"] = gb_items
 
-# --- Data herladen ---
-books_df = st.session_state.books_df
-user_df = st.session_state.user_df
+# Resultaten tonen (blijven bestaan)
+if st.session_state.get("gb_items"):
+    items = st.session_state["gb_items"]
+    for i, info in enumerate(items):
+        title = info["title"]
+        authors = info["authors"]
+        genre = info["genre"]
+        description = info["description"]
+        cover = info["cover"]
+
+        with st.container():
+            cols = st.columns([1, 3])
+            with cols[0]:
+                if cover:
+                    st.image(cover, width=100)
+                else:
+                    st.write("📕 Geen cover")
+            with cols[1]:
+                st.markdown(f"**{title}**  \n*Auteur:* {authors}  \n*Genre:* {genre}")
+                st.caption(description[:300] + ("..." if len(description) > 300 else ""))
+
+                if st.button(f"➕ Voeg toe: {title}", key=f"add_gb_{i}"):
+                    exists = ((st.session_state.books_df["Titel"] == title) &
+                              (st.session_state.books_df["Auteur"] == authors)).any()
+                    if exists:
+                        st.warning(f"'{title}' van {authors} staat al in je bibliotheek.")
+                    else:
+                        new_row = pd.DataFrame([{
+                            "Titel": title,
+                            "Auteur": authors,
+                            "Genre": genre,
+                            "Beschrijving": description,
+                            "Cover": cover
+                        }])
+                        st.session_state.books_df = pd.concat(
+                            [st.session_state.books_df, new_row],
+                            ignore_index=True
+                        )
+                        save_books(st.session_state.books_df)
+                        update_embeddings_ui()
+                        st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
+
+                        # verwijder toegevoegd boek uit resultaten en herlaad
+                        try:
+                            st.session_state["gb_items"].pop(i)
+                        except Exception:
+                            pass
+                        st.rerun()()
 
 # --- Boekenlijst ---
 st.subheader("📖 Boeken")
+books_df = st.session_state.books_df
+user_df = st.session_state.user_df
+
 if books_df.empty:
     st.info("Nog geen boeken toegevoegd.")
 else:
@@ -302,14 +326,14 @@ else:
                 user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
                 save_user_data(user_df)
                 st.session_state.user_df = user_df
-                st.experimental_rerun()
+                st.rerun()
 
             if col2.button(f"💖 Favoriet", key=f"fav_{i}"):
                 user_df = user_df[user_df["Titel"] != row["Titel"]]
                 user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
                 save_user_data(user_df)
                 st.session_state.user_df = user_df
-                st.experimental_rerun()
+                st.rerun()
 
         st.caption(status_text)
         st.divider()
@@ -365,7 +389,7 @@ if os.path.exists("author_model.pkl") and os.path.exists("author_vectorizer.pkl"
 else:
     st.info("⚠️ Auteurmodel niet gevonden. Train eerst het model via `train_author_model.py`.")
 
-# --- Controleer of embeddings klaar zijn ---
+# --- Embedding melding ---
 if st.session_state.get("embedding_update_done", False):
     st.success("✅ Boekenlijst succesvol bijgewerkt!")
     st.session_state["embedding_update_done"] = False
