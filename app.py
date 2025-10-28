@@ -123,41 +123,80 @@ def maak_aanbevelingen_semantic(titel, df, top_n=5):
     else:
         return _maak_aanbevelingen_tfidf(titel, df, top_n)
 
-def persoonlijke_aanbevelingen(user_df, books_df, top_n=5):
-    if user_df.empty or not os.path.exists(EMBEDDINGS_FILE):
+def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
+    """Combineert lokale aanbevelingen met extra suggesties van Google Books."""
+    if user_df.empty:
         return []
 
     fav_books = user_df[user_df["Status"] == "Favoriet"]["Titel"].tolist()
     if not fav_books:
         return []
 
-    embeddings = np.load(EMBEDDINGS_FILE)
-    meta = joblib.load(META_FILE)
-    titles = meta["titles"]
+    local_results = []
+    google_results = []
 
-    title_to_idx = {t: i for i, t in enumerate(titles)}
-    fav_idx = [title_to_idx[t] for t in fav_books if t in title_to_idx]
-    if not fav_idx:
-        return []
+    # --- Lokale aanbevelingen via embeddings ---
+    if os.path.exists(EMBEDDINGS_FILE):
+        embeddings = np.load(EMBEDDINGS_FILE)
+        meta = joblib.load(META_FILE)
+        titles = meta["titles"]
+        title_to_idx = {t: i for i, t in enumerate(titles)}
+        fav_idx = [title_to_idx[t] for t in fav_books if t in title_to_idx]
 
-    mean_vector = np.mean(embeddings[fav_idx], axis=0, keepdims=True)
-    sims = cosine_similarity(mean_vector, embeddings).flatten()
-    top_idx = sims.argsort()[::-1]
+        if fav_idx:
+            mean_vector = np.mean(embeddings[fav_idx], axis=0, keepdims=True)
+            sims = cosine_similarity(mean_vector, embeddings).flatten()
+            top_idx = sims.argsort()[::-1]
 
-    results = []
-    for i in top_idx:
-        book_title = books_df.iloc[i]["Titel"]
-        if book_title not in fav_books:
-            results.append({
-                "Titel": book_title,
-                "Auteur": books_df.iloc[i]["Auteur"],
-                "Genre": books_df.iloc[i]["Genre"],
-                "Cover": books_df.iloc[i]["Cover"],
-                "Score": float(round(sims[i], 3))
-            })
-        if len(results) >= top_n:
-            break
-    return results
+            for i in top_idx:
+                book_title = books_df.iloc[i]["Titel"]
+                if book_title not in fav_books:
+                    local_results.append({
+                        "Titel": book_title,
+                        "Auteur": books_df.iloc[i]["Auteur"],
+                        "Genre": books_df.iloc[i]["Genre"],
+                        "Cover": books_df.iloc[i]["Cover"],
+                        "Bron": "📘 Eigen bibliotheek",
+                        "Score": float(round(sims[i], 3))
+                    })
+                if len(local_results) >= top_n:
+                    break
+
+    # --- Extra Google Books aanbevelingen ---
+    if include_google:
+        seen_titles = set([b["Titel"].lower() for b in local_results] + [t.lower() for t in fav_books])
+        for fav in fav_books[:3]:  # gebruik max 3 favorieten als zoekbasis
+            try:
+                query = requests.utils.quote(fav)
+                url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
+                response = requests.get(url, timeout=10)
+                data = response.json()
+                items = data.get("items", [])
+                for item in items:
+                    info = item.get("volumeInfo", {})
+                    title = info.get("title", "Onbekende titel")
+                    if title.lower() in seen_titles:
+                        continue
+                    authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
+                    genre = ", ".join(info.get("categories", ["Onbekend genre"]))
+                    description = info.get("description", "Geen beschrijving beschikbaar")
+                    cover = info.get("imageLinks", {}).get("thumbnail", "")
+                    google_results.append({
+                        "Titel": title,
+                        "Auteur": authors,
+                        "Genre": genre,
+                        "Beschrijving": description,
+                        "Cover": cover,
+                        "Bron": "🌐 Google Books",
+                        "Score": 0.5
+                    })
+                    seen_titles.add(title.lower())
+            except Exception as e:
+                print(f"Fout bij ophalen Google Books aanbeveling voor '{fav}': {e}")
+                continue
+
+    return local_results + google_results
+
 
 # --- App start ---
 st.set_page_config(page_title="Leesplatform", page_icon="📚", layout="wide")
@@ -396,9 +435,35 @@ else:
             f"**{rec['Titel']}**  \n"
             f"*Auteur:* {rec['Auteur']}  \n"
             f"*Genre:* {rec['Genre']}  \n"
+            f"*Bron:* {rec.get('Bron', '📘 Eigen bibliotheek')}  \n"
             f"💡 *Score:* {rec['Score']}"
         )
+
+        # Voeg toe knop voor Google Books-aanbevelingen
+        if rec.get("Bron") == "🌐 Google Books":
+            if st.button(f"➕ Voeg toe aan bibliotheek: {rec['Titel']}", key=f"addrec_{rec['Titel']}"):
+                exists = ((st.session_state.books_df["Titel"] == rec["Titel"]) &
+                        (st.session_state.books_df["Auteur"] == rec["Auteur"])).any()
+                if exists:
+                    st.warning(f"'{rec['Titel']}' staat al in je bibliotheek.")
+                else:
+                    new_row = pd.DataFrame([{
+                        "Titel": rec["Titel"],
+                        "Auteur": rec["Auteur"],
+                        "Genre": rec["Genre"],
+                        "Beschrijving": rec.get("Beschrijving", ""),
+                        "Cover": rec["Cover"]
+                    }])
+                    st.session_state.books_df = pd.concat(
+                        [st.session_state.books_df, new_row],
+                        ignore_index=True
+                    )
+                    save_books(st.session_state.books_df)
+                    update_embeddings_ui()
+                    st.success(f"✅ '{rec['Titel']}' toegevoegd aan je bibliotheek!")
+                    st.rerun()
         st.divider()
+
 
 # --- Auteurherkenning ---
 st.subheader("✍️ Auteurherkenning")
