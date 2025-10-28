@@ -289,8 +289,24 @@ if st.session_state.get("gb_items"):
 
 # --- Boekenlijst ---
 st.subheader("📖 Boeken")
+
+# Filteroptie
+filter_optie = st.radio(
+    "📚 Toon boeken:",
+    ["Alle boeken", "Favorieten", "Gelezen"],
+    horizontal=True
+)
+
 books_df = st.session_state.books_df
 user_df = st.session_state.user_df
+
+# Filter toepassen
+if filter_optie == "Favorieten":
+    fav_titles = user_df[user_df["Status"] == "Favoriet"]["Titel"].tolist()
+    books_df = books_df[books_df["Titel"].isin(fav_titles)]
+elif filter_optie == "Gelezen":
+    read_titles = user_df[user_df["Status"] == "Gelezen"]["Titel"].tolist()
+    books_df = books_df[books_df["Titel"].isin(read_titles)]
 
 if books_df.empty:
     st.info("Nog geen boeken toegevoegd.")
@@ -313,21 +329,20 @@ else:
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
 
-        # --- Toggle knoppen ---
         with cols[1]:
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns([1, 1, 1])
             huidige_status = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
             status = huidige_status[0] if (isinstance(huidige_status, np.ndarray) and huidige_status.size > 0) else None
 
             # 📘 Toggle gelezen
             if status == "Gelezen":
-                if col1.button("↩️ Markeer als ongelezen", key=f"unread_{i}"):
+                if col1.button("↩️ Ongelezen", key=f"unread_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
             else:
-                if col1.button("📘 Markeer als gelezen", key=f"read_{i}"):
+                if col1.button("📘 Gelezen", key=f"read_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
                     save_user_data(user_df)
@@ -336,24 +351,36 @@ else:
 
             # 💖 Toggle favoriet
             if status == "Favoriet":
-                if col2.button("💔 Verwijder favoriet", key=f"unfav_{i}"):
+                if col2.button("💔 Unfavoriet", key=f"unfav_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
             else:
-                if col2.button("💖 Markeer als favoriet", key=f"fav_{i}"):
+                if col2.button("💖 Favoriet", key=f"fav_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
 
+            # 🗑️ Verwijder knop met bevestiging
+            with col3:
+                if st.checkbox(f"Bevestig verwijdering van '{row['Titel']}'", key=f"confirm_{i}"):
+                    if st.button("🗑️ Verwijder boek", key=f"delete_{i}"):
+                        st.session_state.books_df = st.session_state.books_df[
+                            st.session_state.books_df["Titel"] != row["Titel"]
+                        ]
+                        save_books(st.session_state.books_df)
+                        update_embeddings_ui()
+                        st.success(f"📕 '{row['Titel']}' is verwijderd uit je bibliotheek.")
+                        st.rerun()
+
         st.divider()
 
 # --- Persoonlijke aanbevelingen ---
 st.subheader("🎯 Persoonlijke aanbevelingen")
-persoonlijke_recs = persoonlijke_aanbevelingen(user_df, books_df)
+persoonlijke_recs = persoonlijke_aanbevelingen(user_df, st.session_state.books_df)
 if not persoonlijke_recs:
     st.info("Markeer enkele boeken als favoriet om persoonlijke aanbevelingen te krijgen.")
 else:
