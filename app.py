@@ -351,7 +351,7 @@ else:
 
             # 💖 Toggle favoriet
             if status == "Favoriet":
-                if col2.button("💔 Unfavoriet", key=f"unfav_{i}"):
+                if col2.button("💔 Favoriet ongedaan maken", key=f"unfav_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
