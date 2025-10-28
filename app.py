@@ -206,7 +206,7 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
                 st.error("Titel en auteur zijn verplicht.")
 
 # --- Google Books import (met persistente zoekresultaten) ---
-st.subheader("🌐 Boeken importeren vanuit Google Books")
+st.subheader("🌐 Boeken toevoegen vanuit Google Books")
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:", key="gb_search")
 
 if st.button("🔍 Zoek boeken", key="gb_search_btn"):
