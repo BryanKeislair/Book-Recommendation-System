@@ -40,9 +40,9 @@ def load_user_data():
 def save_user_data(df):
     df.to_csv(USER_DATA_FILE, index=False)
 
-# --- Embeddings functie ---
+# --- Embeddings update ---
 def update_embeddings_ui():
-    """Toont melding en start embedding-update in een aparte thread."""
+    """Toont melding en start embedding-update in aparte thread."""
     st.info("🔄 Boekenlijst wordt bijgewerkt... even geduld aub ⏳")
 
     def _run():
@@ -205,7 +205,7 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
             else:
                 st.error("Titel en auteur zijn verplicht.")
 
-# --- Google Books import (met persistente zoekresultaten) ---
+# --- Google Books import ---
 st.subheader("🌐 Boeken toevoegen vanuit Google Books")
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:", key="gb_search")
 
@@ -241,7 +241,6 @@ if st.button("🔍 Zoek boeken", key="gb_search_btn"):
 
         st.session_state["gb_items"] = gb_items
 
-# Resultaten tonen (blijven bestaan)
 if st.session_state.get("gb_items"):
     items = st.session_state["gb_items"]
     for i, info in enumerate(items):
@@ -282,13 +281,11 @@ if st.session_state.get("gb_items"):
                         save_books(st.session_state.books_df)
                         update_embeddings_ui()
                         st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
-
-                        # verwijder toegevoegd boek uit resultaten en herlaad
                         try:
                             st.session_state["gb_items"].pop(i)
                         except Exception:
                             pass
-                        st.rerun()()
+                        st.rerun()
 
 # --- Boekenlijst ---
 st.subheader("📖 Boeken")
@@ -316,26 +313,42 @@ else:
             f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
         )
 
-        status = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
-        status_text = f"✅ ({status[0]})" if len(status) > 0 else ""
-
+        # --- Toggle knoppen ---
         with cols[1]:
             col1, col2 = st.columns(2)
-            if col1.button(f"📘 Gelezen", key=f"read_{i}"):
-                user_df = user_df[user_df["Titel"] != row["Titel"]]
-                user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
-                save_user_data(user_df)
-                st.session_state.user_df = user_df
-                st.rerun()
+            huidige_status = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
+            status = huidige_status[0] if (isinstance(huidige_status, np.ndarray) and huidige_status.size > 0) else None
 
-            if col2.button(f"💖 Favoriet", key=f"fav_{i}"):
-                user_df = user_df[user_df["Titel"] != row["Titel"]]
-                user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
-                save_user_data(user_df)
-                st.session_state.user_df = user_df
-                st.rerun()
+            # 📘 Toggle gelezen
+            if status == "Gelezen":
+                if col1.button("↩️ Markeer als ongelezen", key=f"unread_{i}"):
+                    user_df = user_df[user_df["Titel"] != row["Titel"]]
+                    save_user_data(user_df)
+                    st.session_state.user_df = user_df
+                    st.rerun()
+            else:
+                if col1.button("📘 Markeer als gelezen", key=f"read_{i}"):
+                    user_df = user_df[user_df["Titel"] != row["Titel"]]
+                    user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
+                    save_user_data(user_df)
+                    st.session_state.user_df = user_df
+                    st.rerun()
 
-        st.caption(status_text)
+            # 💖 Toggle favoriet
+            if status == "Favoriet":
+                if col2.button("💔 Verwijder favoriet", key=f"unfav_{i}"):
+                    user_df = user_df[user_df["Titel"] != row["Titel"]]
+                    save_user_data(user_df)
+                    st.session_state.user_df = user_df
+                    st.rerun()
+            else:
+                if col2.button("💖 Markeer als favoriet", key=f"fav_{i}"):
+                    user_df = user_df[user_df["Titel"] != row["Titel"]]
+                    user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
+                    save_user_data(user_df)
+                    st.session_state.user_df = user_df
+                    st.rerun()
+
         st.divider()
 
 # --- Persoonlijke aanbevelingen ---
