@@ -42,7 +42,6 @@ def save_user_data(df):
 
 # --- Embeddings update ---
 def update_embeddings_ui():
-    """Toont melding en start embedding-update in aparte thread."""
     st.info("🔄 Boekenlijst wordt bijgewerkt... even geduld aub ⏳")
 
     def _run():
@@ -52,11 +51,9 @@ def update_embeddings_ui():
     threading.Thread(target=_run, daemon=True).start()
 
 def update_embeddings():
-    """Herberekent ALLE embeddings en slaat ze op."""
     df = load_books()
     if df.empty:
         return
-
     model = SentenceTransformer("all-MiniLM-L6-v2")
     corpus = (
         df["Titel"].astype(str) + " . " +
@@ -64,67 +61,13 @@ def update_embeddings():
         df["Genre"].astype(str) + " . " +
         df["Beschrijving"].astype(str)
     )
-
     embeddings = model.encode(corpus, convert_to_numpy=True)
     np.save(EMBEDDINGS_FILE, embeddings)
     joblib.dump({"titles": df["Titel"].tolist()}, META_FILE)
 
 # --- Aanbevelingsfuncties ---
-def _maak_aanbevelingen_tfidf(titel, df, top_n=5):
-    df_local = df.copy()
-    df_local["combined"] = df_local["Genre"].astype(str) + " " + df_local["Beschrijving"].astype(str)
-    vectorizer = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(df_local["combined"])
-    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-
-    idx = df_local.index[df_local["Titel"] == titel][0]
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n + 1]
-
-    results = []
-    for i, score in sim_scores:
-        results.append({
-            "Titel": df_local.iloc[i]["Titel"],
-            "Auteur": df_local.iloc[i]["Auteur"],
-            "Genre": df_local.iloc[i]["Genre"],
-            "Cover": df_local.iloc[i]["Cover"],
-            "Score": round(score, 3)
-        })
-    return results
-
-def maak_aanbevelingen_semantic(titel, df, top_n=5):
-    if df.empty or titel not in df["Titel"].values:
-        return []
-
-    if os.path.exists(EMBEDDINGS_FILE) and os.path.exists(META_FILE):
-        embeddings = np.load(EMBEDDINGS_FILE)
-        meta = joblib.load(META_FILE)
-        titles = meta["titles"]
-
-        title_to_idx = {t: i for i, t in enumerate(titles)}
-        if titel not in title_to_idx:
-            return _maak_aanbevelingen_tfidf(titel, df, top_n)
-
-        idx = title_to_idx[titel]
-        sims = cosine_similarity(embeddings[idx:idx + 1], embeddings).flatten()
-        top_idx = sims.argsort()[::-1][1: top_n + 1]
-
-        results = []
-        for i in top_idx:
-            row = df.iloc[i]
-            results.append({
-                "Titel": row["Titel"],
-                "Auteur": row["Auteur"],
-                "Genre": row["Genre"],
-                "Cover": row.get("Cover", ""),
-                "Score": float(round(sims[i], 3))
-            })
-        return results
-    else:
-        return _maak_aanbevelingen_tfidf(titel, df, top_n)
-
 def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
-    """Combineert lokale aanbevelingen met extra suggesties van Google Books."""
+    """Combineert lokale aanbevelingen met inhoudelijk berekende Google Books-scores (in procenten)."""
     if user_df.empty:
         return []
 
@@ -134,20 +77,19 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
 
     local_results = []
     google_results = []
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
-    # --- Lokale aanbevelingen via embeddings ---
+    # --- Lokale aanbevelingen ---
     if os.path.exists(EMBEDDINGS_FILE):
         embeddings = np.load(EMBEDDINGS_FILE)
         meta = joblib.load(META_FILE)
         titles = meta["titles"]
         title_to_idx = {t: i for i, t in enumerate(titles)}
         fav_idx = [title_to_idx[t] for t in fav_books if t in title_to_idx]
-
         if fav_idx:
             mean_vector = np.mean(embeddings[fav_idx], axis=0, keepdims=True)
             sims = cosine_similarity(mean_vector, embeddings).flatten()
             top_idx = sims.argsort()[::-1]
-
             for i in top_idx:
                 book_title = books_df.iloc[i]["Titel"]
                 if book_title not in fav_books:
@@ -157,48 +99,53 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
                         "Genre": books_df.iloc[i]["Genre"],
                         "Cover": books_df.iloc[i]["Cover"],
                         "Bron": "📘 Eigen bibliotheek",
-                        "Score": float(round(sims[i], 3))
+                        "Score": round(float(sims[i] * 100), 2)
                     })
                 if len(local_results) >= top_n:
                     break
 
-    # --- Extra Google Books aanbevelingen ---
-    if include_google:
+    # --- Google Books aanbevelingen ---
+    if include_google and fav_books:
         seen_titles = set([b["Titel"].lower() for b in local_results] + [t.lower() for t in fav_books])
-        for fav in fav_books[:3]:  # gebruik max 3 favorieten als zoekbasis
-            try:
-                query = requests.utils.quote(fav)
-                url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
-                response = requests.get(url, timeout=10)
-                data = response.json()
-                items = data.get("items", [])
-                for item in items:
-                    info = item.get("volumeInfo", {})
-                    title = info.get("title", "Onbekende titel")
-                    if title.lower() in seen_titles:
-                        continue
-                    authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
-                    genre = ", ".join(info.get("categories", ["Onbekend genre"]))
-                    description = info.get("description", "Geen beschrijving beschikbaar")
-                    cover = info.get("imageLinks", {}).get("thumbnail", "")
-                    google_results.append({
-                        "Titel": title,
-                        "Auteur": authors,
-                        "Genre": genre,
-                        "Beschrijving": description,
-                        "Cover": cover,
-                        "Bron": "🌐 Google Books",
-                        "Score": 0.5
-                    })
-                    seen_titles.add(title.lower())
-            except Exception as e:
-                print(f"Fout bij ophalen Google Books aanbeveling voor '{fav}': {e}")
-                continue
+        if 'mean_vector' in locals():
+            for fav in fav_books[:3]:
+                try:
+                    query = requests.utils.quote(fav)
+                    url = f"https://www.googleapis.com/books/v1/volumes?q={query}&maxResults=5"
+                    response = requests.get(url, timeout=10)
+                    data = response.json()
+                    for item in data.get("items", []):
+                        info = item.get("volumeInfo", {})
+                        title = info.get("title", "Onbekende titel")
+                        if title.lower() in seen_titles:
+                            continue
+                        authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
+                        genre = ", ".join(info.get("categories", ["Onbekend genre"]))
+                        description = info.get("description", "Geen beschrijving beschikbaar")
+                        cover = info.get("imageLinks", {}).get("thumbnail", "")
+                        text = f"{title}. {authors}. {genre}. {description}"
+                        google_vec = model.encode(text, convert_to_numpy=True)
+                        score = cosine_similarity(mean_vector, google_vec.reshape(1, -1))[0][0]
+                        score_percent = round(float(score * 100), 2)
+                        google_results.append({
+                            "Titel": title,
+                            "Auteur": authors,
+                            "Genre": genre,
+                            "Beschrijving": description,
+                            "Cover": cover,
+                            "Bron": "🌐 Google Books",
+                            "Score": score_percent
+                        })
+                        seen_titles.add(title.lower())
+                except Exception as e:
+                    print(f"Fout bij ophalen Google Books aanbeveling: {e}")
+                    continue
 
-    return local_results + google_results
+    combined = local_results + google_results
+    combined = sorted(combined, key=lambda x: x["Score"], reverse=True)
+    return combined[:top_n + 5]
 
-
-# --- App start ---
+# --- Streamlit setup ---
 st.set_page_config(page_title="Leesplatform", page_icon="📚", layout="wide")
 st.title("📚 Leesplatform")
 
@@ -225,7 +172,6 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
                     cover_path = os.path.join(COVERS_DIR, f"{title.strip().replace(' ', '_')}.png")
                     with open(cover_path, "wb") as f:
                         f.write(cover_file.getbuffer())
-
                 new_row = pd.DataFrame([{
                     "Titel": title.strip(),
                     "Auteur": author.strip(),
@@ -233,21 +179,16 @@ with st.expander("📘 Handmatig boek toevoegen (optioneel)"):
                     "Beschrijving": description.strip(),
                     "Cover": cover_path
                 }])
-
-                st.session_state.books_df = pd.concat(
-                    [st.session_state.books_df, new_row],
-                    ignore_index=True
-                )
+                st.session_state.books_df = pd.concat([st.session_state.books_df, new_row], ignore_index=True)
                 save_books(st.session_state.books_df)
                 update_embeddings_ui()
                 st.success(f"✅ '{title}' toegevoegd aan je bibliotheek!")
             else:
                 st.error("Titel en auteur zijn verplicht.")
 
-# --- Google Books import ---
+# --- Google Books zoeken ---
 st.subheader("🌐 Boeken toevoegen vanuit Google Books")
 search_query = st.text_input("Zoek op titel, auteur of onderwerp:", key="gb_search")
-
 if st.button("🔍 Zoek boeken", key="gb_search_btn"):
     if not search_query.strip():
         st.warning("Voer een zoekterm in.")
@@ -257,89 +198,54 @@ if st.button("🔍 Zoek boeken", key="gb_search_btn"):
             response = requests.get(url, timeout=10)
             data = response.json()
         except Exception as e:
-            st.error(f"Fout bij ophalen van resultaten: {e}")
+            st.error(f"Fout bij ophalen: {e}")
             data = {}
-
         items = data.get("items", [])
         gb_items = []
         for item in items:
             info = item.get("volumeInfo", {})
-            title = info.get("title", "Onbekende titel")
-            authors = ", ".join(info.get("authors", ["Onbekende auteur"]))
-            genre = ", ".join(info.get("categories", ["Onbekend genre"]))
-            description = info.get("description", "Geen beschrijving beschikbaar")
-            cover = info.get("imageLinks", {}).get("thumbnail", "")
-
             gb_items.append({
-                "title": title,
-                "authors": authors,
-                "genre": genre,
-                "description": description,
-                "cover": cover
+                "title": info.get("title", "Onbekende titel"),
+                "authors": ", ".join(info.get("authors", ["Onbekende auteur"])),
+                "genre": ", ".join(info.get("categories", ["Onbekend genre"])),
+                "description": info.get("description", "Geen beschrijving beschikbaar"),
+                "cover": info.get("imageLinks", {}).get("thumbnail", "")
             })
-
         st.session_state["gb_items"] = gb_items
 
 if st.session_state.get("gb_items"):
-    items = st.session_state["gb_items"]
-    for i, info in enumerate(items):
-        title = info["title"]
-        authors = info["authors"]
-        genre = info["genre"]
-        description = info["description"]
-        cover = info["cover"]
-
+    for i, info in enumerate(st.session_state["gb_items"]):
         with st.container():
             cols = st.columns([1, 3])
-            with cols[0]:
-                if cover:
-                    st.image(cover, width=100)
+            if info["cover"]:
+                cols[0].image(info["cover"], width=100)
+            cols[1].markdown(f"**{info['title']}**  \n*Auteur:* {info['authors']}  \n*Genre:* {info['genre']}")
+            cols[1].caption(info["description"][:300] + ("..." if len(info["description"]) > 300 else ""))
+            if st.button(f"➕ Voeg toe: {info['title']}", key=f"add_gb_{i}"):
+                exists = ((st.session_state.books_df["Titel"] == info["title"]) &
+                          (st.session_state.books_df["Auteur"] == info["authors"])).any()
+                if exists:
+                    st.warning(f"'{info['title']}' bestaat al in je bibliotheek.")
                 else:
-                    st.write("📕 Geen cover")
-            with cols[1]:
-                st.markdown(f"**{title}**  \n*Auteur:* {authors}  \n*Genre:* {genre}")
-                st.caption(description[:300] + ("..." if len(description) > 300 else ""))
-
-                if st.button(f"➕ Voeg toe: {title}", key=f"add_gb_{i}"):
-                    exists = ((st.session_state.books_df["Titel"] == title) &
-                              (st.session_state.books_df["Auteur"] == authors)).any()
-                    if exists:
-                        st.warning(f"'{title}' van {authors} staat al in je bibliotheek.")
-                    else:
-                        new_row = pd.DataFrame([{
-                            "Titel": title,
-                            "Auteur": authors,
-                            "Genre": genre,
-                            "Beschrijving": description,
-                            "Cover": cover
-                        }])
-                        st.session_state.books_df = pd.concat(
-                            [st.session_state.books_df, new_row],
-                            ignore_index=True
-                        )
-                        save_books(st.session_state.books_df)
-                        update_embeddings_ui()
-                        st.success(f"✅ '{title}' toegevoegd aan jouw bibliotheek!")
-                        try:
-                            st.session_state["gb_items"].pop(i)
-                        except Exception:
-                            pass
-                        st.rerun()
+                    new_row = pd.DataFrame([{
+                        "Titel": info["title"],
+                        "Auteur": info["authors"],
+                        "Genre": info["genre"],
+                        "Beschrijving": info["description"],
+                        "Cover": info["cover"]
+                    }])
+                    st.session_state.books_df = pd.concat([st.session_state.books_df, new_row], ignore_index=True)
+                    save_books(st.session_state.books_df)
+                    update_embeddings_ui()
+                    st.success(f"✅ '{info['title']}' toegevoegd!")
+                    st.rerun()
 
 # --- Boekenlijst ---
 st.subheader("📖 Boeken")
-
-# Filteroptie
-filter_optie = st.radio(
-    "📚 Toon boeken:",
-    ["Alle boeken", "Favorieten", "Gelezen"],
-    horizontal=True
-)
-
+filter_optie = st.radio("📚 Toon boeken:", ["Alle boeken", "Favorieten", "Gelezen"], horizontal=True)
 books_df = st.session_state.books_df
 user_df = st.session_state.user_df
 
-# Filter toepassen
 if filter_optie == "Favorieten":
     fav_titles = user_df[user_df["Status"] == "Favoriet"]["Titel"].tolist()
     books_df = books_df[books_df["Titel"].isin(fav_titles)]
@@ -352,98 +258,81 @@ if books_df.empty:
 else:
     for i, row in books_df.iterrows():
         cols = st.columns([1, 4])
-        cover_path = row["Cover"]
-
-        if isinstance(cover_path, str) and cover_path.strip() and (
-            os.path.exists(cover_path) or cover_path.startswith("http")
+        if isinstance(row["Cover"], str) and row["Cover"].strip() and (
+            os.path.exists(row["Cover"]) or row["Cover"].startswith("http")
         ):
-            cols[0].image(cover_path, width=120)
+            cols[0].image(row["Cover"], width=120)
         else:
-            cols[0].write("📕 Geen coverafbeelding")
-
-        cols[1].markdown(
-            f"**{row['Titel']}**  \n"
-            f"*Auteur:* {row['Auteur']}  \n"
-            f"*Genre:* {row['Genre']}  \n"
-            f"{row['Beschrijving'] if row['Beschrijving'] else ''}"
-        )
-
+            cols[0].write("📕 Geen cover")
+        cols[1].markdown(f"**{row['Titel']}**  \n*Auteur:* {row['Auteur']}  \n*Genre:* {row['Genre']}  \n{row['Beschrijving']}")
         with cols[1]:
-            col1, col2, col3 = st.columns([1, 1, 1])
-            huidige_status = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
-            status = huidige_status[0] if (isinstance(huidige_status, np.ndarray) and huidige_status.size > 0) else None
+            c1, c2, c3 = st.columns([1, 1, 1])
+            status_vals = user_df[user_df["Titel"] == row["Titel"]]["Status"].values
+            status = status_vals[0] if len(status_vals) > 0 else None
 
-            # 📘 Toggle gelezen
+            # Toggle "Gelezen"
             if status == "Gelezen":
-                if col1.button("↩️ Ongelezen", key=f"unread_{i}"):
+                if c1.button("↩️ Ongelezen", key=f"unread_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
             else:
-                if col1.button("📘 Gelezen", key=f"read_{i}"):
+                if c1.button("📘 Gelezen", key=f"read_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     user_df.loc[len(user_df)] = [row["Titel"], "Gelezen"]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
 
-            # 💖 Toggle favoriet
+            # Toggle "Favoriet"
             if status == "Favoriet":
-                if col2.button("💔 Favoriet ongedaan maken", key=f"unfav_{i}"):
+                if c2.button("💔 Unfavoriet", key=f"unfav_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
             else:
-                if col2.button("💖 Favoriet", key=f"fav_{i}"):
+                if c2.button("💖 Favoriet", key=f"fav_{i}"):
                     user_df = user_df[user_df["Titel"] != row["Titel"]]
                     user_df.loc[len(user_df)] = [row["Titel"], "Favoriet"]
                     save_user_data(user_df)
                     st.session_state.user_df = user_df
                     st.rerun()
 
-            # 🗑️ Verwijder knop met bevestiging
-            with col3:
-                if st.checkbox(f"Bevestig verwijdering van '{row['Titel']}'", key=f"confirm_{i}"):
-                    if st.button("🗑️ Verwijder boek", key=f"delete_{i}"):
-                        st.session_state.books_df = st.session_state.books_df[
-                            st.session_state.books_df["Titel"] != row["Titel"]
-                        ]
-                        save_books(st.session_state.books_df)
-                        update_embeddings_ui()
-                        st.success(f"📕 '{row['Titel']}' is verwijderd uit je bibliotheek.")
-                        st.rerun()
-
+            # Verwijderen
+            if c3.checkbox(f"Bevestig verwijdering van '{row['Titel']}'", key=f"conf_{i}"):
+                if c3.button("🗑️ Verwijder", key=f"del_{i}"):
+                    st.session_state.books_df = st.session_state.books_df[
+                        st.session_state.books_df["Titel"] != row["Titel"]
+                    ]
+                    save_books(st.session_state.books_df)
+                    update_embeddings_ui()
+                    st.success(f"📕 '{row['Titel']}' verwijderd.")
+                    st.rerun()
         st.divider()
 
 # --- Persoonlijke aanbevelingen ---
 st.subheader("🎯 Persoonlijke aanbevelingen")
 persoonlijke_recs = persoonlijke_aanbevelingen(user_df, st.session_state.books_df)
 if not persoonlijke_recs:
-    st.info("Markeer enkele boeken als favoriet om persoonlijke aanbevelingen te krijgen.")
+    st.info("Markeer enkele boeken als favoriet om aanbevelingen te krijgen.")
 else:
     for rec in persoonlijke_recs:
         cols = st.columns([1, 4])
-        if isinstance(rec["Cover"], str) and rec["Cover"].strip() and (
-            os.path.exists(rec["Cover"]) or rec["Cover"].startswith("http")
-        ):
+        if rec["Cover"]:
             cols[0].image(rec["Cover"], width=100)
-        else:
-            cols[0].write("📕 Geen cover")
         cols[1].markdown(
             f"**{rec['Titel']}**  \n"
             f"*Auteur:* {rec['Auteur']}  \n"
             f"*Genre:* {rec['Genre']}  \n"
-            f"*Bron:* {rec.get('Bron', '📘 Eigen bibliotheek')}  \n"
-            f"💡 *Score:* {rec['Score']}"
+            f"*Bron:* {rec['Bron']}  \n"
+            f"💡 *Overeenkomst:* {rec['Score']}%"
         )
-
-        # Voeg toe knop voor Google Books-aanbevelingen
-        if rec.get("Bron") == "🌐 Google Books":
+        if rec["Bron"] == "🌐 Google Books":
             if st.button(f"➕ Voeg toe aan bibliotheek: {rec['Titel']}", key=f"addrec_{rec['Titel']}"):
                 exists = ((st.session_state.books_df["Titel"] == rec["Titel"]) &
-                        (st.session_state.books_df["Auteur"] == rec["Auteur"])).any()
+                          (st.session_state.books_df["Auteur"] == rec["Auteur"])).any()
                 if exists:
                     st.warning(f"'{rec['Titel']}' staat al in je bibliotheek.")
                 else:
@@ -460,41 +349,32 @@ else:
                     )
                     save_books(st.session_state.books_df)
                     update_embeddings_ui()
-                    st.success(f"✅ '{rec['Titel']}' toegevoegd aan je bibliotheek!")
+                    st.success(f"✅ '{rec['Titel']}' toegevoegd!")
                     st.rerun()
         st.divider()
-
 
 # --- Auteurherkenning ---
 st.subheader("✍️ Auteurherkenning")
 if os.path.exists("author_model.pkl") and os.path.exists("author_vectorizer.pkl"):
     model = joblib.load("author_model.pkl")
     vectorizer = joblib.load("author_vectorizer.pkl")
-
-    input_text = st.text_area("Voer een tekstfragment in om de auteur te voorspellen:")
-
+    text = st.text_area("Voer een tekstfragment in:")
     if st.button("🔍 Voorspel auteur"):
-        if input_text.strip():
-            X_vec = vectorizer.transform([input_text])
+        if text.strip():
+            X_vec = vectorizer.transform([text])
             probs = model.predict_proba(X_vec)[0]
             authors = model.classes_
-            best_idx = probs.argmax()
-            predicted_author = authors[best_idx]
-            confidence = probs[best_idx] * 100
-
-            st.success(f"🧠 Waarschijnlijk geschreven door: **{predicted_author}** ({confidence:.2f}% zekerheid)")
-
-            chart_data = pd.DataFrame({
-                "Auteur": authors,
-                "Zekerheid (%)": probs * 100
-            }).sort_values("Zekerheid (%)", ascending=False)
-            st.bar_chart(chart_data.set_index("Auteur"))
+            pred = authors[probs.argmax()]
+            conf = round(probs.max() * 100, 2)
+            st.success(f"🧠 Waarschijnlijk geschreven door **{pred}** ({conf}%)")
+            df = pd.DataFrame({"Auteur": authors, "Zekerheid (%)": probs * 100}).sort_values("Zekerheid (%)", ascending=False)
+            st.bar_chart(df.set_index("Auteur"))
         else:
             st.warning("Voer eerst een tekstfragment in.")
 else:
-    st.info("⚠️ Auteurmodel niet gevonden. Train eerst het model via `train_author_model.py`.")
+    st.info("⚠️ Auteurmodel niet gevonden. Train eerst via `train_author_model.py`.")
 
 # --- Embedding melding ---
 if st.session_state.get("embedding_update_done", False):
-    st.success("✅ Boekenlijst succesvol bijgewerkt!")
+    st.success("✅ Embeddings succesvol bijgewerkt!")
     st.session_state["embedding_update_done"] = False
