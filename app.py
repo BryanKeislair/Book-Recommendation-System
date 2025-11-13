@@ -42,7 +42,6 @@ def save_user_data(df):
     df.to_csv(USER_DATA_FILE, index=False)
 
 def update_embeddings_ui():
-    """Toont melding en start embedding-update in aparte thread (niet-blokkerend)."""
     st.info("🔄 Boekenlijst wordt bijgewerkt... even geduld aub ⏳")
 
     def _run():
@@ -52,7 +51,6 @@ def update_embeddings_ui():
     threading.Thread(target=_run, daemon=True).start()
 
 def update_embeddings():
-    """Herberekent ALLE embeddings en slaat ze op (numpy + meta)."""
     df = load_books()
     if df.empty:
         return
@@ -69,12 +67,6 @@ def update_embeddings():
     joblib.dump({"titles": df["Titel"].tolist()}, META_FILE)
 
 def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
-    """
-    Combineert lokale aanbevelingen (op basis van opgeslagen embeddings) met
-    aanvullende Google Books-resultaten die semantisch vergeleken worden.
-    Return: lijst van dicts met velden: Titel,Auteur,Genre,Beschrijving,Cover,Bron,Score
-    Score in procenten (0..100), type float (2 decimalen).
-    """
     if user_df is None or user_df.empty:
         return []
 
@@ -123,7 +115,6 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
         if mean_vector is None:
             fav_texts = []
             for f in fav_books:
-                # probeer omschrijving vanuit books_df
                 match = books_df[books_df["Titel"] == f]
                 if not match.empty:
                     descr = match.iloc[0].get("Beschrijving", "")
@@ -176,10 +167,8 @@ def persoonlijke_aanbevelingen(user_df, books_df, top_n=5, include_google=True):
 
     # Combineer en sorteer
     combined = sorted(local_results + google_results, key=lambda x: x["Score"], reverse=True)
-    # toon iets meer dan top_n zodat gebruiker keuze heeft (maar niet te veel)
     return combined[: max(top_n + 5, top_n)]
 
-# --- UI helper: kleur op basis van score ---
 def score_to_color(score_pct: float) -> str:
     """
     Return hex color based on fixed ranges:
@@ -190,7 +179,7 @@ def score_to_color(score_pct: float) -> str:
     if score_pct < 40:
         return "#e53935"  # red
     if score_pct <= 70:
-        return "#f4b400"  # yellow-ish
+        return "#f4b400"  
     return "#43a047"      # green
 
 def render_score_bar(score_pct: float):
@@ -291,7 +280,6 @@ if st.session_state.get("gb_items"):
                 cols[0].write("📕 Geen cover")
             cols[1].markdown(f"**{info['title']}**  \n*Auteur:* {info['authors']}  \n*Genre:* {info['genre']}")
             cols[1].caption(info["description"][:300] + ("..." if len(info["description"]) > 300 else ""))
-            # unique key per item
             if cols[1].button(f"➕ Voeg toe: {info['title']}", key=f"add_gb_{i}"):
                 exists = ((st.session_state.books_df["Titel"] == info["title"]) &
                           (st.session_state.books_df["Auteur"] == info["authors"])).any()
@@ -315,13 +303,11 @@ if st.session_state.get("gb_items"):
                         st.session_state["gb_items"] = [it for j, it in enumerate(st.session_state.get("gb_items", [])) if j != i]
                     st.rerun()
 
-# --- Boekenlijst (filter + toggle + delete) ---
 st.subheader("📖 Boeken")
 filter_optie = st.radio("📚 Toon boeken:", ["Alle boeken", "Favorieten", "Gelezen"], horizontal=True)
 books_df = st.session_state.books_df.copy()
 user_df = st.session_state.user_df.copy()
 
-# apply filter
 if filter_optie == "Favorieten":
     fav_titles = user_df[user_df["Status"] == "Favoriet"]["Titel"].tolist()
     books_df = books_df[books_df["Titel"].isin(fav_titles)]
@@ -383,7 +369,6 @@ else:
             with col3:
                 if st.checkbox(f"Bevestig verwijdering van '{row['Titel']}'", key=f"confirm_{i}"):
                     if st.button("🗑️ Verwijder boek", key=f"delete_{i}"):
-                        # remove from books_df (global session copy)
                         st.session_state.books_df = st.session_state.books_df[st.session_state.books_df["Titel"] != row["Titel"]]
                         save_books(st.session_state.books_df)
                         update_embeddings_ui()
